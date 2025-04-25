@@ -11,17 +11,9 @@ namespace sensesp {
     return degrees * (M_PI / 180.0);
  }
   
-class RadiansTransform : public FloatTransform {
+class RadiansTransform : public LambdaTransform<float, float> {
  public:
-  RadiansTransform() : FloatTransform() {}
-  
-  void set(const float& inputDegrees) override {
-    radiansValue = convertDegreesToRadians(inputDegrees);
-    FloatTransform::set(inputDegrees);
-  };
-
- private:
-   float radiansValue = 0.;
+  RadiansTransform() : LambdaTransform<float, float>(convertDegreesToRadians) {}
 };
 
 

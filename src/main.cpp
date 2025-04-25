@@ -15,6 +15,7 @@
 #include "sensesp/sensors/sensor.h"
 #include "sensesp/signalk/signalk_output.h"
 #include "sensesp/signalk/signalk_value_listener.h"
+#include "sensesp/transforms/lambda_transform.h"
 #include "sensesp/transforms/linear.h"
 #include "sensesp/transforms/voltagedivider.h"
 #include "sensesp_app_builder.h"
@@ -24,15 +25,6 @@
 using namespace sensesp;
 
 using xyPair = std::pair<float, float>;
-
-
-/*class RudderAngleSensor {
-  public:
-    RudderAngleSensor() {}
-
-  private:
-  AnalogInput
-}*/
 
 // The setup function performs one-time application initialization.
 void setup() {
@@ -57,20 +49,26 @@ void setup() {
   // GPIO number to use for the analog input
   const uint8_t kAnalogInputPin = 36;
   // Define how often (in milliseconds) new samples are acquired
-  const unsigned int kAnalogInputReadInterval = 1500;
+  const unsigned int kAnalogInputReadInterval = 500;
   const float kAnalogInputScale = 3.3;
   const float kFixedResistorValue = 47; // Ohms
-  const float kMinSensorResistance = 0;
-  const float kMaxSensorResistance = 190;
+
+  // Using measured min/max resistance values through esp32 ADC and sensesp;
+  // which differ by ~10~20 Ohms compared with externally verified values (0-190 Ohms),
+  const float kMinSensorResistance = 2.113363;
+  const float kMaxSensorResistance = 223.;
+
   const float minSensorDegrees = -35.0;
   const float maxSensorDegrees = 35.0;
+
+  analogSetPinAttenuation(kAnalogInputPin, ADC_ATTENDB_MAX);
 
   auto analog_input = std::make_shared<RepeatSensor<float>>(kAnalogInputReadInterval, [kAnalogInputPin]() {
     return analogReadMilliVolts(kAnalogInputPin) / 1000.;
   });
 
   analog_input->attach([analog_input]() {
-    debugD("Rudder angle sensor analog input value: %f", analog_input->get());
+    //debugD("Rudder angle sensor analog input value: %f", analog_input->get());
   });
 
   auto voltageDivider = std::make_shared<VoltageDividerR2>(
@@ -85,24 +83,10 @@ void setup() {
       xyPair(kMaxSensorResistance, maxSensorDegrees)
     );
 
-  transformToDegrees->attach([transformToDegrees]() {
-    //debugD("Rudder angle degrees value: %f", transformToDegrees->get());
-  });
-
   auto degreesToRadians = std::make_shared<RadiansTransform>();
-  degreesToRadians->attach([degreesToRadians]() {
-    debugD("Degrees converted to radians: %f", degreesToRadians->get());
-  });
 
-  auto metadata = std::make_shared<SKMetadata>("rad", "Rudder Angle");
-  auto sk_output = std::make_shared<SKOutput<float>>(
-      String(sk_path),  // Signal K path
-      "/Sensors/RudderAngle/sk",
-      metadata
-  );
-  sk_output->attach([sk_output]() {
-    debugD("Final value sent out to SK: %f", sk_output->get());
-  });
+  auto sk_output = std::make_shared<SKOutput<float>>(sk_path, "",
+    std::make_shared<SKMetadata>("rad", "Rudder Angle"));
 
   analog_input
     ->connect_to(voltageDivider)
@@ -116,14 +100,14 @@ void setup() {
     return std::make_shared<StatusPageItem<float>>(name, -1., kUIGroup, order);
   };
 
-  auto spAnalogInput = makeStatusPageItemFor("analog input", 1);
-  auto spVoldateDivider = makeStatusPageItemFor("voltage divider conversion to resistance", 2);
-  auto spDegrees = makeStatusPageItemFor("linear conversion to degrees", 3);
+  auto statusAnalogInput = makeStatusPageItemFor("analog input", 1);
+  auto statusVoldageDivider = makeStatusPageItemFor("voltage divider conversion to resistance", 2);
+  auto statusDegrees = makeStatusPageItemFor("linear conversion to degrees", 3);
   auto statusPageSkOut = makeStatusPageItemFor("Value sent to SK for 'steering.rudderAngle'", 4);
   auto statusPageSkValue = makeStatusPageItemFor("SignalK value for 'steering.rudderAngle'", 5);
-  analog_input->connect_to(spAnalogInput);
-  voltageDivider->connect_to(spVoldateDivider);
-  transformToDegrees->connect_to(spDegrees);
+  analog_input->connect_to(statusAnalogInput);
+  voltageDivider->connect_to(statusVoldageDivider);
+  transformToDegrees->connect_to(statusDegrees);
   sk_output->connect_to(statusPageSkOut);
   skListener->connect_to(statusPageSkValue);
 
