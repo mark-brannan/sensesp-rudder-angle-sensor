@@ -26,6 +26,8 @@ using namespace sensesp;
 
 using xyPair = std::pair<float, float>;
 
+  auto retained = std::vector<std::shared_ptr<void>>();
+
 // The setup function performs one-time application initialization.
 void setup() {
   SetupLogging(ESP_LOG_DEBUG);
@@ -58,8 +60,8 @@ void setup() {
   const float kMinSensorResistance = 2.113363;
   const float kMaxSensorResistance = 223.;
 
-  const float minSensorDegrees = -35.0;
-  const float maxSensorDegrees = 35.0;
+  const float minSensorDegrees = -50.0;
+  const float maxSensorDegrees = 50.0;
 
   analogSetPinAttenuation(kAnalogInputPin, ADC_ATTENDB_MAX);
 
@@ -68,14 +70,14 @@ void setup() {
   });
 
   analog_input->attach([analog_input]() {
-    //debugD("Rudder angle sensor analog input value: %f", analog_input->get());
+    debugD("Rudder angle sensor analog input value: %f", analog_input->get());
   });
 
   auto voltageDivider = std::make_shared<VoltageDividerR2>(
     kFixedResistorValue, kAnalogInputScale, "/Sensors/Rudder Angle/VoltageDividerR2");
 
   voltageDivider->attach([voltageDivider]() {
-    //debugD("Rudder angle sensor resistance value: %f", voltageDivider->get());
+    debugD("Rudder angle sensor resistance value: %f", voltageDivider->get());
   });
 
   auto transformToDegrees = linearTransformOf(
@@ -97,19 +99,16 @@ void setup() {
   auto skListener = std::make_shared<FloatSKListener>(sk_path, 500);
 
   auto makeStatusPageItemFor = [kUIGroup](const char* name, int order) {
-    return std::make_shared<StatusPageItem<float>>(name, -1., kUIGroup, order);
+    auto status_page_item = std::make_shared<StatusPageItem<float>>(name, -1., kUIGroup, order);
+    retained.push_back(status_page_item);
+    return status_page_item;
   };
 
-  auto statusAnalogInput = makeStatusPageItemFor("analog input", 1);
-  auto statusVoldageDivider = makeStatusPageItemFor("voltage divider conversion to resistance", 2);
-  auto statusDegrees = makeStatusPageItemFor("linear conversion to degrees", 3);
-  auto statusPageSkOut = makeStatusPageItemFor("Value sent to SK for 'steering.rudderAngle'", 4);
-  auto statusPageSkValue = makeStatusPageItemFor("SignalK value for 'steering.rudderAngle'", 5);
-  analog_input->connect_to(statusAnalogInput);
-  voltageDivider->connect_to(statusVoldageDivider);
-  transformToDegrees->connect_to(statusDegrees);
-  sk_output->connect_to(statusPageSkOut);
-  skListener->connect_to(statusPageSkValue);
+  analog_input->connect_to(makeStatusPageItemFor("analog input", 1));
+  voltageDivider->connect_to(makeStatusPageItemFor("voltage divider conversion to resistance", 2));
+  transformToDegrees->connect_to(makeStatusPageItemFor("linear conversion to degrees", 3));
+  sk_output->connect_to(makeStatusPageItemFor("Value sent to SK for 'steering.rudderAngle'", 4));
+  skListener->connect_to(makeStatusPageItemFor("SignalK value for 'steering.rudderAngle'", 5));
 
 
   // To avoid garbage collecting all shared pointers created in setup(),
