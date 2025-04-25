@@ -35,16 +35,16 @@ void setup() {
   // Construct the global SensESPApp() object
   SensESPAppBuilder builder;
   sensesp_app = (&builder)
-                    // Set a custom hostname for the app.
-                    ->set_hostname("sensesp-rudder-angle-sensor")
-                    // Optionally, hard-code the WiFi and Signal K server
-                    // settings. This is normally not needed.
-                    //->set_wifi_client("My WiFi SSID", "my_wifi_password")
-                    //->set_wifi_access_point("My AP SSID", "my_ap_password")
-                    //->set_sk_server("192.168.10.3", 80)
-                    ->get_app();
+    // Set a custom hostname for the app.
+    ->set_hostname("sensesp-rudder-angle-sensor")
+    // Optionally, hard-code the WiFi and Signal K server
+    // settings. This is normally not needed.
+    //->set_wifi_client("My WiFi SSID", "my_wifi_password")
+    //->set_wifi_access_point("My AP SSID", "my_ap_password")
+    //->set_sk_server("192.168.10.3", 80)
+    ->get_app();
 
-  // https://signalk.org/specification/1.4.0/doc/vesselsBranch.html#vesselsregexpsteeringrudderangle
+  // https://signalk.org/specification/1.7.0/doc/vesselsBranch.html#vesselsregexpsteeringrudderangle
   const char* sk_path = "steering.rudderAngle";
   const char* kUIGroup ="Rudder Angle Sensor";
 
@@ -53,10 +53,11 @@ void setup() {
   // Define how often (in milliseconds) new samples are acquired
   const unsigned int kAnalogInputReadInterval = 500;
   const float kAnalogInputScale = 3.3;
-  const float kFixedResistorValue = 47; // Ohms
+  const float kFixedResistorValue = 47; // Ohms, adjust to match your voltage divider
 
   // Using measured min/max resistance values through esp32 ADC and sensesp;
-  // which differ by ~10~20 Ohms compared with externally verified values (0-190 Ohms),
+  // which differ by ~10~20 Ohms compared with externally verified values (0-190 Ohms).
+  // Check the status page (or logs) for your installation and update accordingly.
   const float kMinSensorResistance = 2.113363;
   const float kMaxSensorResistance = 223.;
 
@@ -96,6 +97,8 @@ void setup() {
     ->connect_to(degreesToRadians)
     ->connect_to(sk_output);
 
+  // Listen to values sent back *from* the signalk server
+  // in order to easily validate or troubleshoot.
   auto skListener = std::make_shared<FloatSKListener>(sk_path, 500);
 
   auto makeStatusPageItemFor = [kUIGroup](const char* name, int order) {
@@ -104,6 +107,7 @@ void setup() {
     return status_page_item;
   };
 
+  // display intermediate values on the status page for ease of validation/troubleshooting
   analog_input->connect_to(makeStatusPageItemFor("analog input", 1));
   voltageDivider->connect_to(makeStatusPageItemFor("voltage divider conversion to resistance", 2));
   transformToDegrees->connect_to(makeStatusPageItemFor("linear conversion to degrees", 3));
