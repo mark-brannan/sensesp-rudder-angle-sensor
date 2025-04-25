@@ -14,6 +14,7 @@
 #include "sensesp.h"
 #include "sensesp/sensors/sensor.h"
 #include "sensesp/signalk/signalk_output.h"
+#include "sensesp/signalk/signalk_value_listener.h"
 #include "sensesp/transforms/linear.h"
 #include "sensesp/transforms/voltagedivider.h"
 #include "sensesp_app_builder.h"
@@ -58,7 +59,7 @@ void setup() {
   // Define how often (in milliseconds) new samples are acquired
   const unsigned int kAnalogInputReadInterval = 1500;
   const float kAnalogInputScale = 3.3;
-  const float kFixedResistorValue = 47; // 47 Ohms
+  const float kFixedResistorValue = 47; // Ohms
   const float kMinSensorResistance = 0;
   const float kMaxSensorResistance = 190;
   const float minSensorDegrees = -35.0;
@@ -72,13 +73,12 @@ void setup() {
     debugD("Rudder angle sensor analog input value: %f", analog_input->get());
   });
 
-  auto voltageDivider = new  VoltageDividerR2(
-    kMaxSensorResistance, kAnalogInputScale, "/Sensors/Rudder Angle/VoltageDividerR2");
+  auto voltageDivider = std::make_shared<VoltageDividerR2>(
+    kFixedResistorValue, kAnalogInputScale, "/Sensors/Rudder Angle/VoltageDividerR2");
 
   voltageDivider->attach([voltageDivider]() {
     //debugD("Rudder angle sensor resistance value: %f", voltageDivider->get());
   });
-
 
   auto transformToDegrees = linearTransformOf(
       xyPair(kMinSensorResistance, minSensorDegrees),
@@ -90,19 +90,27 @@ void setup() {
   });
 
   auto degreesToRadians = std::make_shared<RadiansTransform>();
+  degreesToRadians->attach([degreesToRadians]() {
+    debugD("Degrees converted to radians: %f", degreesToRadians->get());
+  });
 
   auto metadata = std::make_shared<SKMetadata>("rad", "Rudder Angle");
   auto sk_output = std::make_shared<SKOutput<float>>(
-      sk_path,  // Signal K path
+      String(sk_path),  // Signal K path
       "/Sensors/RudderAngle/sk",
       metadata
   );
+  sk_output->attach([sk_output]() {
+    debugD("Final value sent out to SK: %f", sk_output->get());
+  });
 
   analog_input
     ->connect_to(voltageDivider)
     ->connect_to(transformToDegrees)
     ->connect_to(degreesToRadians)
     ->connect_to(sk_output);
+
+  auto skListener = std::make_shared<FloatSKListener>(sk_path, 500);
 
   auto makeStatusPageItemFor = [kUIGroup](const char* name, int order) {
     return std::make_shared<StatusPageItem<float>>(name, -1., kUIGroup, order);
@@ -111,14 +119,14 @@ void setup() {
   auto spAnalogInput = makeStatusPageItemFor("analog input", 1);
   auto spVoldateDivider = makeStatusPageItemFor("voltage divider conversion to resistance", 2);
   auto spDegrees = makeStatusPageItemFor("linear conversion to degrees", 3);
-  auto statusPageSkOut = makeStatusPageItemFor("output to SignalK", 4);
-  //analog_input->connect_to(makeStatusPageItemFor("analog input"));
+  auto statusPageSkOut = makeStatusPageItemFor("Value sent to SK for 'steering.rudderAngle'", 4);
+  auto statusPageSkValue = makeStatusPageItemFor("SignalK value for 'steering.rudderAngle'", 5);
   analog_input->connect_to(spAnalogInput);
   voltageDivider->connect_to(spVoldateDivider);
   transformToDegrees->connect_to(spDegrees);
   sk_output->connect_to(statusPageSkOut);
-  //voltageDivider->connect_to(makeStatusPageItemFor("voltage divider conversion to resistance"));
-  //transformToDegrees->connect_to(makeStatusPageItemFor("linear conversion to degrees"));
+  skListener->connect_to(statusPageSkValue);
+
 
   // To avoid garbage collecting all shared pointers created in setup(),
   // loop from here.

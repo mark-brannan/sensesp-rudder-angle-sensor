@@ -16,9 +16,14 @@ class RadiansTransform : public FloatTransform {
   RadiansTransform() : FloatTransform() {}
   
   void set(const float& inputDegrees) override {
-    FloatTransform::set(convertDegreesToRadians(inputDegrees));
+    radiansValue = convertDegreesToRadians(inputDegrees);
+    FloatTransform::set(inputDegrees);
   };
+
+ private:
+   float radiansValue = 0.;
 };
+
 
 }  // namespace sensesp
 
