@@ -9,16 +9,29 @@
 // for external hardware libraries.
 
 #include <memory>
+#include <functional>
 
 #include "sensesp.h"
-#include "sensesp/sensors/analog_input.h"
-#include "sensesp/sensors/digital_input.h"
 #include "sensesp/sensors/sensor.h"
 #include "sensesp/signalk/signalk_output.h"
-#include "sensesp/system/lambda_consumer.h"
+#include "sensesp/transforms/linear.h"
+#include "sensesp/transforms/voltagedivider.h"
 #include "sensesp_app_builder.h"
+#include "linear.h"
+#include "radians.h"
 
 using namespace sensesp;
+
+using xyPair = std::pair<float, float>;
+
+
+/*class RudderAngleSensor {
+  public:
+    RudderAngleSensor() {}
+
+  private:
+  AnalogInput
+}*/
 
 // The setup function performs one-time application initialization.
 void setup() {
@@ -28,7 +41,7 @@ void setup() {
   SensESPAppBuilder builder;
   sensesp_app = (&builder)
                     // Set a custom hostname for the app.
-                    ->set_hostname("my-sensesp-project")
+                    ->set_hostname("sensesp-rudder-angle-sensor")
                     // Optionally, hard-code the WiFi and Signal K server
                     // settings. This is normally not needed.
                     //->set_wifi_client("My WiFi SSID", "my_wifi_password")
@@ -36,103 +49,76 @@ void setup() {
                     //->set_sk_server("192.168.10.3", 80)
                     ->get_app();
 
+  // https://signalk.org/specification/1.4.0/doc/vesselsBranch.html#vesselsregexpsteeringrudderangle
+  const char* sk_path = "steering.rudderAngle";
+  const char* kUIGroup ="Rudder Angle Sensor";
+
   // GPIO number to use for the analog input
   const uint8_t kAnalogInputPin = 36;
   // Define how often (in milliseconds) new samples are acquired
-  const unsigned int kAnalogInputReadInterval = 500;
-  // Define the produced value at the maximum input voltage (3.3V).
-  // A value of 3.3 gives output equal to the input voltage.
+  const unsigned int kAnalogInputReadInterval = 1500;
   const float kAnalogInputScale = 3.3;
+  const float kFixedResistorValue = 47; // 47 Ohms
+  const float kMinSensorResistance = 0;
+  const float kMaxSensorResistance = 190;
+  const float minSensorDegrees = -35.0;
+  const float maxSensorDegrees = 35.0;
 
-  // Create a new Analog Input Sensor that reads an analog input pin
-  // periodically.
-  auto analog_input = std::make_shared<AnalogInput>(
-      kAnalogInputPin, kAnalogInputReadInterval, "", kAnalogInputScale);
+  auto analog_input = std::make_shared<RepeatSensor<float>>(kAnalogInputReadInterval, [kAnalogInputPin]() {
+    return analogReadMilliVolts(kAnalogInputPin) / 1000.;
+  });
 
-  // Add an observer that prints out the current value of the analog input
-  // every time it changes.
   analog_input->attach([analog_input]() {
-    debugD("Analog input value: %f", analog_input->get());
+    debugD("Rudder angle sensor analog input value: %f", analog_input->get());
   });
 
-  // Set GPIO pin 15 to output and toggle it every 650 ms
+  auto voltageDivider = new  VoltageDividerR2(
+    kMaxSensorResistance, kAnalogInputScale, "/Sensors/Rudder Angle/VoltageDividerR2");
 
-  const uint8_t kDigitalOutputPin = 15;
-  const unsigned int kDigitalOutputInterval = 650;
-  pinMode(kDigitalOutputPin, OUTPUT);
-  event_loop()->onRepeat(kDigitalOutputInterval, [kDigitalOutputPin]() {
-    digitalWrite(kDigitalOutputPin, !digitalRead(kDigitalOutputPin));
+  voltageDivider->attach([voltageDivider]() {
+    //debugD("Rudder angle sensor resistance value: %f", voltageDivider->get());
   });
 
-  // Read GPIO 14 every time it changes
 
-  const uint8_t kDigitalInput1Pin = 14;
-  auto digital_input1 = std::make_shared<DigitalInputChange>(
-      kDigitalInput1Pin, INPUT_PULLUP, CHANGE);
+  auto transformToDegrees = linearTransformOf(
+      xyPair(kMinSensorResistance, minSensorDegrees),
+      xyPair(kMaxSensorResistance, maxSensorDegrees)
+    );
 
-  // Connect the digital input to a lambda consumer that prints out the
-  // value every time it changes.
+  transformToDegrees->attach([transformToDegrees]() {
+    //debugD("Rudder angle degrees value: %f", transformToDegrees->get());
+  });
 
-  // Test this yourself by connecting pin 15 to pin 14 with a jumper wire and
-  // see if the value changes!
+  auto degreesToRadians = std::make_shared<RadiansTransform>();
 
-  auto digital_input1_consumer = std::make_shared<LambdaConsumer<bool>>(
-      [](bool input) { debugD("Digital input value changed: %d", input); });
-
-  digital_input1->connect_to(digital_input1_consumer);
-
-  // Create another digital input, this time with RepeatSensor. This approach
-  // can be used to connect external sensor library to SensESP!
-
-  const uint8_t kDigitalInput2Pin = 13;
-  const unsigned int kDigitalInput2Interval = 1000;
-
-  // Configure the pin. Replace this with your custom library initialization
-  // code!
-  pinMode(kDigitalInput2Pin, INPUT_PULLUP);
-
-  // Define a new RepeatSensor that reads the pin every 100 ms.
-  // Replace the lambda function internals with the input routine of your custom
-  // library.
-
-  // Again, test this yourself by connecting pin 15 to pin 13 with a jumper
-  // wire and see if the value changes!
-
-  auto digital_input2 = std::make_shared<RepeatSensor<bool>>(
-      kDigitalInput2Interval,
-      [kDigitalInput2Pin]() { return digitalRead(kDigitalInput2Pin); });
-
-  // Connect the analog input to Signal K output. This will publish the
-  // analog input value to the Signal K server every time it changes.
-  auto aiv_metadata = std::make_shared<SKMetadata>("V", "Analog input voltage");
-  auto aiv_sk_output = std::make_shared<SKOutput<float>>(
-      "sensors.analog_input.voltage",   // Signal K path
-      "/Sensors/Analog Input/Voltage",  // configuration path, used in the
-                                        // web UI and for storing the
-                                        // configuration
-      aiv_metadata
+  auto metadata = std::make_shared<SKMetadata>("rad", "Rudder Angle");
+  auto sk_output = std::make_shared<SKOutput<float>>(
+      sk_path,  // Signal K path
+      "/Sensors/RudderAngle/sk",
+      metadata
   );
 
-  ConfigItem(aiv_sk_output)
-      ->set_title("Analog Input Voltage SK Output Path")
-      ->set_description("The SK path to publish the analog input voltage")
-      ->set_sort_order(100);
+  analog_input
+    ->connect_to(voltageDivider)
+    ->connect_to(transformToDegrees)
+    ->connect_to(degreesToRadians)
+    ->connect_to(sk_output);
 
-  analog_input->connect_to(aiv_sk_output);
+  auto makeStatusPageItemFor = [kUIGroup](const char* name, int order) {
+    return std::make_shared<StatusPageItem<float>>(name, -1., kUIGroup, order);
+  };
 
-  // Connect digital input 2 to Signal K output.
-  auto di2_metadata = std::make_shared<SKMetadata>("", "Digital input 2 value");
-  auto di2_sk_output = std::make_shared<SKOutput<bool>>(
-      "sensors.digital_input2.value",    // Signal K path
-      "/Sensors/Digital Input 2/Value",  // configuration path
-      di2_metadata
-  );
-
-  ConfigItem(di2_sk_output)
-      ->set_title("Digital Input 2 SK Output Path")
-      ->set_sort_order(200);
-
-  digital_input2->connect_to(di2_sk_output);
+  auto spAnalogInput = makeStatusPageItemFor("analog input", 1);
+  auto spVoldateDivider = makeStatusPageItemFor("voltage divider conversion to resistance", 2);
+  auto spDegrees = makeStatusPageItemFor("linear conversion to degrees", 3);
+  auto statusPageSkOut = makeStatusPageItemFor("output to SignalK", 4);
+  //analog_input->connect_to(makeStatusPageItemFor("analog input"));
+  analog_input->connect_to(spAnalogInput);
+  voltageDivider->connect_to(spVoldateDivider);
+  transformToDegrees->connect_to(spDegrees);
+  sk_output->connect_to(statusPageSkOut);
+  //voltageDivider->connect_to(makeStatusPageItemFor("voltage divider conversion to resistance"));
+  //transformToDegrees->connect_to(makeStatusPageItemFor("linear conversion to degrees"));
 
   // To avoid garbage collecting all shared pointers created in setup(),
   // loop from here.
