@@ -61,14 +61,20 @@ void setup() {
   const float kMinSensorResistance = 2.113363;
   const float kMaxSensorResistance = 223.;
 
-  const float minSensorDegrees = -50.0;
-  const float maxSensorDegrees = 50.0;
+  const float minSensorDegrees = -40.0;
+  const float maxSensorDegrees = 40.0;
 
   analogSetPinAttenuation(kAnalogInputPin, ADC_ATTENDB_MAX);
 
   auto analog_input = std::make_shared<RepeatSensor<float>>(kAnalogInputReadInterval, [kAnalogInputPin]() {
     return analogReadMilliVolts(kAnalogInputPin) / 1000.;
   });
+
+  //analog_input->config_path_ = "/Sensors/Rudder Angle/AnalogInput";
+
+  //ConfigItem(analog_input)
+    //->set_title("Analog Input")
+    //->set_description("Analog Input for rudder angle sensor");
 
   analog_input->attach([analog_input]() {
     debugD("Rudder angle sensor analog input value: %f", analog_input->get());
@@ -90,10 +96,20 @@ void setup() {
       xyPair(kMaxSensorResistance, maxSensorDegrees)
     );
 
+  ConfigItem(transformToDegrees)
+    ->set_config_schema("/Sensors/Rudder Angle/LinearTransform")
+    ->set_title("Linear Transform to Degrees");
+
   auto degreesToRadians = std::make_shared<RadiansTransform>();
 
   auto sk_output = std::make_shared<SKOutput<float>>(sk_path, "",
     std::make_shared<SKMetadata>("rad", "Rudder Angle"));
+
+  sk_output->attach([sk_output, sk_path]() {
+    auto radians = sk_output->get();
+    auto degrees = convertRadiansToDegress(radians);
+    debugD("Final '%s' value: %f radians (%f degrees)", sk_path, radians, degrees);
+  });
 
   analog_input
     ->connect_to(voltageDivider)

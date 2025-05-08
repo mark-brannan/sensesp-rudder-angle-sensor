@@ -10,7 +10,11 @@ namespace sensesp {
  inline const double convertDegreesToRadians(const double& degrees) {
     return degrees * (M_PI / 180.0);
  }
-  
+
+ inline const double convertRadiansToDegress(const double& radians) {
+    return radians * 180.0 * M_PI;
+ }
+
 class RadiansTransform : public LambdaTransform<float, float> {
  public:
   RadiansTransform() : LambdaTransform<float, float>(convertDegreesToRadians) {}
