@@ -46,7 +46,7 @@ void setup() {
 
   // https://signalk.org/specification/1.7.0/doc/vesselsBranch.html#vesselsregexpsteeringrudderangle
   const char* sk_path = "steering.rudderAngle";
-  const char* kUIGroup ="Rudder Angle Sensor";
+  const char* kUIGroup = "Rudder Angle Sensor";
 
   // GPIO number to use for the analog input
   const uint8_t kAnalogInputPin = 36;
@@ -76,6 +76,10 @@ void setup() {
 
   auto voltageDivider = std::make_shared<VoltageDividerR2>(
     kFixedResistorValue, kAnalogInputScale, "/Sensors/Rudder Angle/VoltageDividerR2");
+
+  ConfigItem(voltageDivider)
+    ->set_title("Voltage Divider")
+    ->set_description("Voltage divider for rudder angle sensor and analog input");
 
   voltageDivider->attach([voltageDivider]() {
     debugD("Rudder angle sensor resistance value: %f", voltageDivider->get());
