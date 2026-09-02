@@ -1,26 +1,26 @@
-#ifndef SENSESP_TRANSFORMS_RADIANS_H_
-#define SENSESP_TRANSFORMS_RADIANS_H_
+#ifndef RUDDER_ANGLE_SENSOR_RADIANS_H_
+#define RUDDER_ANGLE_SENSOR_RADIANS_H_
 
 #include <cmath>
-#include "sensesp/transforms/transform.h"
+
+#include "sensesp/transforms/lambda_transform.h"
 
 namespace sensesp {
 
- // Conveneince function to convert degrees to radians
- inline const double convertDegreesToRadians(const double& degrees) {
-    return degrees * (M_PI / 180.0);
- }
+inline float degrees_to_radians(float degrees) {
+  return degrees * (static_cast<float>(M_PI) / 180.0f);
+}
 
- inline const double convertRadiansToDegress(const double& radians) {
-    return radians * (180.0 / M_PI);
- }
+inline float radians_to_degrees(float radians) {
+  return radians * (180.0f / static_cast<float>(M_PI));
+}
 
-class RadiansTransform : public LambdaTransform<float, float> {
+/// Transform that converts a value in degrees to radians.
+class DegreesToRadians : public LambdaTransform<float, float> {
  public:
-  RadiansTransform() : LambdaTransform<float, float>(convertDegreesToRadians) {}
+  DegreesToRadians() : LambdaTransform<float, float>(degrees_to_radians) {}
 };
-
 
 }  // namespace sensesp
 
-#endif // SENSESP_TRANSFORMS_RADIANS_H_
+#endif  // RUDDER_ANGLE_SENSOR_RADIANS_H_
