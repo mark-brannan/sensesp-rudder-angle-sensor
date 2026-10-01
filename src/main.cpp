@@ -1,32 +1,67 @@
-// Signal K application template file.
+// Rudder angle sensor for Signal K, built on SensESP.
 //
-// This application demonstrates core SensESP concepts in a very
-// concise manner. You can build and upload the application as is
-// and observe the value changes on the serial port monitor.
+// A resistive rudder angle sensor is read through a voltage divider on an
+// analog input pin. The chain is:
 //
-// You can use this source file as a basis for your own projects.
-// Remove the parts that are not relevant to you, and add your own code
-// for external hardware libraries.
+//   analog input (V) -> VoltageDividerR2 (Ohms) -> Linear (degrees)
+//     -> DegreesToRadians (rad) -> SKOutput "steering.rudderAngle"
+//
+// Every intermediate value is shown on the status page, and a listener
+// echoes the value the Signal K server reports back, so the whole chain can
+// be validated from the web UI.
 
 #include <memory>
-#include <functional>
 
 #include "sensesp.h"
 #include "sensesp/sensors/sensor.h"
 #include "sensesp/signalk/signalk_output.h"
 #include "sensesp/signalk/signalk_value_listener.h"
-#include "sensesp/transforms/lambda_transform.h"
-#include "sensesp/transforms/linear.h"
+#include "sensesp/system/lambda_consumer.h"
 #include "sensesp/transforms/voltagedivider.h"
+#include "sensesp/ui/config_item.h"
+#include "sensesp/ui/status_page_item.h"
 #include "sensesp_app_builder.h"
+
 #include "linear.h"
 #include "radians.h"
 
 using namespace sensesp;
 
-using xyPair = std::pair<float, float>;
+namespace {
 
-  auto retained = std::vector<std::shared_ptr<void>>();
+constexpr char kLogTag[] = "rudder_angle";
+
+// https://signalk.org/specification/1.7.0/doc/vesselsBranch.html#vesselsregexpsteeringrudderangle
+constexpr char kSKPath[] = "steering.rudderAngle";
+constexpr char kUIGroup[] = "Rudder Angle Sensor";
+
+// GPIO number to use for the analog input
+constexpr uint8_t kAnalogInputPin = 36;
+// Define how often (in milliseconds) new samples are acquired
+constexpr unsigned int kAnalogInputReadInterval = 500;
+constexpr float kAnalogInputScale = 3.3f;
+// Ohms, adjust to match your voltage divider
+constexpr float kFixedResistorValue = 47.0f;
+
+// Using measured min/max resistance values through esp32 ADC and sensesp;
+// which differ by ~10~20 Ohms compared with externally verified values
+// (0-190 Ohms). Check the status page (or logs) for your installation and
+// update accordingly.
+constexpr float kMinSensorResistance = 2.113363f;
+constexpr float kMaxSensorResistance = 223.0f;
+
+constexpr float kMinSensorDegrees = -40.0f;
+constexpr float kMaxSensorDegrees = 40.0f;
+
+// Make a status page item for a float value in this app's UI group. The
+// returned item is kept alive by the producer it is connected to.
+std::shared_ptr<StatusPageItem<float>> status_item(const char* name,
+                                                   int order) {
+  return std::make_shared<StatusPageItem<float>>(name, -1.0f, kUIGroup,
+                                                 order);
+}
+
+}  // namespace
 
 // The setup function performs one-time application initialization.
 void setup() {
@@ -35,105 +70,82 @@ void setup() {
   // Construct the global SensESPApp() object
   SensESPAppBuilder builder;
   sensesp_app = (&builder)
-    // Set a custom hostname for the app.
-    ->set_hostname("sensesp-rudder-angle-sensor")
-    // Optionally, hard-code the WiFi and Signal K server
-    // settings. This is normally not needed.
-    //->set_wifi_client("My WiFi SSID", "my_wifi_password")
-    //->set_wifi_access_point("My AP SSID", "my_ap_password")
-    //->set_sk_server("192.168.10.3", 80)
-    ->get_app();
-
-  // https://signalk.org/specification/1.7.0/doc/vesselsBranch.html#vesselsregexpsteeringrudderangle
-  const char* sk_path = "steering.rudderAngle";
-  const char* kUIGroup = "Rudder Angle Sensor";
-
-  // GPIO number to use for the analog input
-  const uint8_t kAnalogInputPin = 36;
-  // Define how often (in milliseconds) new samples are acquired
-  const unsigned int kAnalogInputReadInterval = 500;
-  const float kAnalogInputScale = 3.3;
-  const float kFixedResistorValue = 47; // Ohms, adjust to match your voltage divider
-
-  // Using measured min/max resistance values through esp32 ADC and sensesp;
-  // which differ by ~10~20 Ohms compared with externally verified values (0-190 Ohms).
-  // Check the status page (or logs) for your installation and update accordingly.
-  const float kMinSensorResistance = 2.113363;
-  const float kMaxSensorResistance = 223.;
-
-  const float minSensorDegrees = -40.0;
-  const float maxSensorDegrees = 40.0;
+                    // Set a custom hostname for the app.
+                    ->set_hostname("sensesp-rudder-angle-sensor")
+                    // Optionally, hard-code the WiFi and Signal K server
+                    // settings. This is normally not needed.
+                    //->set_wifi_client("My WiFi SSID", "my_wifi_password")
+                    //->set_wifi_access_point("My AP SSID", "my_ap_password")
+                    //->set_sk_server("192.168.10.3", 80)
+                    ->get_app();
 
   analogSetPinAttenuation(kAnalogInputPin, ADC_ATTENDB_MAX);
 
-  auto analog_input = std::make_shared<RepeatSensor<float>>(kAnalogInputReadInterval, [kAnalogInputPin]() {
-    return analogReadMilliVolts(kAnalogInputPin) / 1000.;
-  });
+  auto analog_input = std::make_shared<RepeatSensor<float>>(
+      kAnalogInputReadInterval,
+      []() { return analogReadMilliVolts(kAnalogInputPin) / 1000.0f; });
 
-  //analog_input->config_path_ = "/Sensors/Rudder Angle/AnalogInput";
+  analog_input->connect_to(std::make_shared<LambdaConsumer<float>>([](float v) {
+    ESP_LOGD(kLogTag, "Rudder angle sensor analog input value: %f", v);
+  }));
 
-  //ConfigItem(analog_input)
-    //->set_title("Analog Input")
-    //->set_description("Analog Input for rudder angle sensor");
+  auto voltage_divider = std::make_shared<VoltageDividerR2>(
+      kFixedResistorValue, kAnalogInputScale,
+      "/Sensors/Rudder Angle/VoltageDividerR2");
 
-  analog_input->attach([analog_input]() {
-    debugD("Rudder angle sensor analog input value: %f", analog_input->get());
-  });
+  ConfigItem(voltage_divider)
+      ->set_title("Voltage Divider")
+      ->set_description(
+          "Voltage divider for rudder angle sensor and analog input")
+      ->set_sort_order(100);
 
-  auto voltageDivider = std::make_shared<VoltageDividerR2>(
-    kFixedResistorValue, kAnalogInputScale, "/Sensors/Rudder Angle/VoltageDividerR2");
+  voltage_divider->connect_to(
+      std::make_shared<LambdaConsumer<float>>([](float v) {
+        ESP_LOGD(kLogTag, "Rudder angle sensor resistance value: %f", v);
+      }));
 
-  ConfigItem(voltageDivider)
-    ->set_title("Voltage Divider")
-    ->set_description("Voltage divider for rudder angle sensor and analog input");
+  auto transform_to_degrees = linear_transform_of(
+      XYPair(kMinSensorResistance, kMinSensorDegrees),
+      XYPair(kMaxSensorResistance, kMaxSensorDegrees),
+      "/Sensors/Rudder Angle/LinearTransform");
 
-  voltageDivider->attach([voltageDivider]() {
-    debugD("Rudder angle sensor resistance value: %f", voltageDivider->get());
-  });
+  ConfigItem(transform_to_degrees)
+      ->set_title("Linear Transform to Degrees")
+      ->set_description(
+          "Maps the measured sensor resistance (Ohms) to rudder angle "
+          "(degrees)")
+      ->set_sort_order(200);
 
-  auto transformToDegrees = linearTransformOf(
-      xyPair(kMinSensorResistance, minSensorDegrees),
-      xyPair(kMaxSensorResistance, maxSensorDegrees)
-    );
+  auto degrees_to_radians_transform = std::make_shared<DegreesToRadians>();
 
-  ConfigItem(transformToDegrees)
-    ->set_config_schema("/Sensors/Rudder Angle/LinearTransform")
-    ->set_title("Linear Transform to Degrees");
+  auto sk_output = std::make_shared<SKOutput<float>>(
+      kSKPath, "", std::make_shared<SKMetadata>("rad", "Rudder Angle"));
 
-  auto degreesToRadians = std::make_shared<RadiansTransform>();
+  sk_output->connect_to(std::make_shared<LambdaConsumer<float>>([](float rad) {
+    ESP_LOGD(kLogTag, "Final '%s' value: %f radians (%f degrees)", kSKPath,
+             rad, radians_to_degrees(rad));
+  }));
 
-  auto sk_output = std::make_shared<SKOutput<float>>(sk_path, "",
-    std::make_shared<SKMetadata>("rad", "Rudder Angle"));
+  analog_input->connect_to(voltage_divider)
+      ->connect_to(transform_to_degrees)
+      ->connect_to(degrees_to_radians_transform)
+      ->connect_to(sk_output);
 
-  sk_output->attach([sk_output, sk_path]() {
-    auto radians = sk_output->get();
-    auto degrees = convertRadiansToDegress(radians);
-    debugD("Final '%s' value: %f radians (%f degrees)", sk_path, radians, degrees);
-  });
+  // Listen to values sent back *from* the Signal K server in order to
+  // easily validate or troubleshoot.
+  auto sk_listener = std::make_shared<FloatSKListener>(kSKPath, 500);
 
-  analog_input
-    ->connect_to(voltageDivider)
-    ->connect_to(transformToDegrees)
-    ->connect_to(degreesToRadians)
-    ->connect_to(sk_output);
-
-  // Listen to values sent back *from* the signalk server
-  // in order to easily validate or troubleshoot.
-  auto skListener = std::make_shared<FloatSKListener>(sk_path, 500);
-
-  auto makeStatusPageItemFor = [kUIGroup](const char* name, int order) {
-    auto status_page_item = std::make_shared<StatusPageItem<float>>(name, -1., kUIGroup, order);
-    retained.push_back(status_page_item);
-    return status_page_item;
-  };
-
-  // display intermediate values on the status page for ease of validation/troubleshooting
-  analog_input->connect_to(makeStatusPageItemFor("analog input", 1));
-  voltageDivider->connect_to(makeStatusPageItemFor("voltage divider conversion to resistance", 2));
-  transformToDegrees->connect_to(makeStatusPageItemFor("linear conversion to degrees", 3));
-  sk_output->connect_to(makeStatusPageItemFor("Value sent to SK for 'steering.rudderAngle'", 4));
-  skListener->connect_to(makeStatusPageItemFor("SignalK value for 'steering.rudderAngle'", 5));
-
+  // Display intermediate values on the status page for ease of
+  // validation/troubleshooting.
+  analog_input->connect_to(status_item("analog input", 1));
+  voltage_divider->connect_to(
+      status_item("voltage divider conversion to resistance", 2));
+  transform_to_degrees->connect_to(
+      status_item("linear conversion to degrees", 3));
+  sk_output->connect_to(
+      status_item("Value sent to SK for 'steering.rudderAngle'", 4));
+  sk_listener->connect_to(
+      status_item("SignalK value for 'steering.rudderAngle'", 5));
 
   // To avoid garbage collecting all shared pointers created in setup(),
   // loop from here.
